@@ -25,19 +25,6 @@ docker build -t node-sub-manager .
 docker run -d -p 8080:8080 -v node-sub-data:/app/data --name node-sub node-sub-manager
 ```
 
-### 部署到 VPS（Oracle 免费小鸡）
-
-```bash
-# 1. 安装 JDK 17
-sudo apt update && sudo apt install -y openjdk-17-jre-headless
-
-# 2. 传 jar 包并运行（screen / systemd 二选一）
-java -jar node-sub-manager-0.1.0.jar
-
-# 3. 放行端口（Oracle 控制台安全列表 + UFW 二选一）
-sudo ufw allow 8080/tcp
-```
-
 ## 接口
 
 | 方法 | 路径 | 说明 |
