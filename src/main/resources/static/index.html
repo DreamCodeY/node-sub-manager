@@ -1,0 +1,208 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>节点管理小站 - vless 批量转换</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, "PingFang SC", "Microsoft YaHei", sans-serif;
+         max-width: 900px; margin: 0 auto; padding: 20px; background: #f5f6f8; color: #333; }
+  h1 { font-size: 22px; }
+  .privacy { background: #e8f5e9; border: 1px solid #a5d6a7; border-radius: 8px;
+             padding: 12px 16px; font-size: 14px; margin-bottom: 16px; }
+  textarea { width: 100%; height: 160px; padding: 10px; font-family: monospace;
+             font-size: 13px; border: 1px solid #ccc; border-radius: 8px; resize: vertical; }
+  .btn-row { margin: 12px 0; display: flex; gap: 10px; flex-wrap: wrap; }
+  button { padding: 10px 20px; font-size: 15px; border: none; border-radius: 8px;
+           cursor: pointer; background: #1976d2; color: #fff; }
+  button.secondary { background: #616161; }
+  button.danger { background: #c62828; }
+  button:disabled { background: #bdbdbd; cursor: not-allowed; }
+  .errors { margin: 12px 0; }
+  .err-line { background: #ffebee; border-left: 4px solid #c62828; padding: 8px 12px;
+              margin-bottom: 6px; font-size: 14px; border-radius: 0 8px 8px 0; }
+  pre { background: #263238; color: #eceff1; padding: 14px; border-radius: 8px;
+        overflow-x: auto; font-size: 12px; max-height: 400px; overflow-y: auto; }
+  .sub-box { background: #fff3e0; border: 1px solid #ffcc80; border-radius: 8px;
+             padding: 12px 16px; margin-top: 12px; font-size: 14px; word-break: break-all; }
+  .sub-box code { background: #fff; padding: 2px 6px; border-radius: 4px; }
+  .ok { color: #2e7d32; font-weight: bold; }
+</style>
+</head>
+<body>
+
+<h1>节点管理小站 <small style="font-size:13px;color:#888">vless → Mihomo/Clash</small></h1>
+
+<div class="privacy">
+  🔒 <b>隐私承诺</b>：粘贴的节点链接<b>只在你的浏览器里解析</b>，不会上传到任何服务器。
+  只有当你主动点击「生成订阅链接」时，生成的配置文件才会被上传保存，且可随时删除。
+</div>
+
+<textarea id="input" placeholder="每行粘贴一个 vless:// 链接，最多 50 个&#10;示例：&#10;vless://uuid@server:port?encryption=none&security=reality&sni=xxx&fp=chrome&pbk=xxx&sid=xxx#备注"></textarea>
+
+<div class="btn-row">
+  <button onclick="doConvert()">转换</button>
+  <button class="secondary" onclick="downloadYaml()" id="btnDl" disabled>下载 YAML</button>
+  <button class="secondary" onclick="createSub()" id="btnSub" disabled>生成订阅链接</button>
+</div>
+
+<div class="errors" id="errors"></div>
+<div id="resultInfo"></div>
+<pre id="preview" style="display:none"></pre>
+<div class="sub-box" id="subBox" style="display:none"></div>
+
+<script>
+let lastYaml = '';
+let lastSubId = '';
+
+/** 解析单个 vless 链接，失败返回 {line, message} */
+function parseVless(link, lineNo) {
+  link = link.trim();
+  if (!link) return null;
+  if (!link.startsWith('vless://')) throw { line: lineNo, message: '不是 vless:// 链接' };
+  let u;
+  try { u = new URL(link); } catch (e) { throw { line: lineNo, message: '链接格式无法解析' }; }
+  const uuid = decodeURIComponent(u.username || '');
+  if (!uuid) throw { line: lineNo, message: '缺少 uuid' };
+  if (!u.hostname) throw { line: lineNo, message: '缺少服务器地址' };
+  const p = u.searchParams;
+  let remark = '';
+  try { remark = decodeURIComponent(u.hash ? u.hash.slice(1) : ''); } catch (e) {}
+  return {
+    name: remark || ('节点-' + lineNo),
+    uuid: uuid,
+    server: u.hostname,
+    port: u.port ? parseInt(u.port, 10) : 443,
+    sni: p.get('sni') || u.hostname,
+    fp: p.get('fp') || 'chrome',
+    pbk: p.get('pbk') || '',
+    sid: p.get('sid') || '',
+    flow: p.get('flow') || '',
+    network: p.get('type') || 'tcp'
+  };
+}
+
+const q = s => '"' + String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+
+function generateYaml(nodes) {
+  let out = 'proxies:\n';
+  const names = [];
+  nodes.forEach(n => {
+    names.push(n.name);
+    out += `  - name: ${q(n.name)}\n`;
+    out += '    type: vless\n';
+    out += `    server: ${n.server}\n`;
+    out += `    port: ${n.port}\n`;
+    out += `    uuid: ${n.uuid}\n`;
+    out += '    udp: true\n';
+    out += '    tls: true\n';
+    out += `    network: ${n.network}\n`;
+    if (n.flow) out += `    flow: ${n.flow}\n`;
+    out += `    servername: ${n.sni}\n`;
+    out += `    client-fingerprint: ${n.fp}\n`;
+    out += '    reality-opts:\n';
+    out += `      public-key: ${n.pbk}\n`;
+    if (n.sid) out += `      short-id: ${n.sid}\n`;
+  });
+  out += '\nproxy-groups:\n';
+  out += '  - name: PROXY\n';
+  out += '    type: url-test\n';
+  out += '    url: http://www.gstatic.com/generate_204\n';
+  out += '    interval: 300\n';
+  out += '    proxies:\n';
+  names.forEach(n => { out += `      - ${q(n)}\n`; });
+  out += '\nrules:\n';
+  out += '  - GEOIP,CN,DIRECT\n';
+  out += '  - MATCH,PROXY\n';
+  return out;
+}
+
+function doConvert() {
+  const lines = document.getElementById('input').value.split('\n');
+  const nodes = [], errors = [];
+  const nonEmpty = lines.filter(l => l.trim());
+  if (nonEmpty.length === 0) { alert('请先粘贴节点链接'); return; }
+  if (nonEmpty.length > 50) { alert('一次最多 50 个链接'); return; }
+  lines.forEach((line, i) => {
+    if (!line.trim()) return;
+    try {
+      const n = parseVless(line, i + 1);
+      if (n) nodes.push(n);
+    } catch (e) { errors.push(e); }
+  });
+
+  const errBox = document.getElementById('errors');
+  errBox.innerHTML = errors.map(e =>
+    `<div class="err-line">第 ${e.line} 行：${e.message}（该行已跳过）</div>`).join('');
+
+  if (nodes.length === 0) {
+    document.getElementById('resultInfo').innerHTML = '<p style="color:#c62828">没有可用的节点</p>';
+    document.getElementById('preview').style.display = 'none';
+    document.getElementById('btnDl').disabled = true;
+    document.getElementById('btnSub').disabled = true;
+    return;
+  }
+  lastYaml = generateYaml(nodes);
+  lastSubId = '';
+  document.getElementById('subBox').style.display = 'none';
+  document.getElementById('resultInfo').innerHTML =
+    `<p class="ok">✅ 成功转换 ${nodes.length} 个节点${errors.length ? `，跳过 ${errors.length} 个错误行` : ''}</p>`;
+  const pre = document.getElementById('preview');
+  pre.textContent = lastYaml;
+  pre.style.display = 'block';
+  document.getElementById('btnDl').disabled = false;
+  document.getElementById('btnSub').disabled = false;
+}
+
+function downloadYaml() {
+  if (!lastYaml) return;
+  const blob = new Blob([lastYaml], { type: 'text/yaml;charset=utf-8' });
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'nodes.yaml';
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+async function createSub() {
+  if (!lastYaml) return;
+  if (!confirm('将把当前配置文件上传到服务器生成订阅链接，确定吗？\n（可随时删除）')) return;
+  const btn = document.getElementById('btnSub');
+  btn.disabled = true; btn.textContent = '生成中…';
+  try {
+    const resp = await fetch('/api/sub', {
+      method: 'POST',
+      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+      body: lastYaml
+    });
+    const data = await resp.json();
+    if (!resp.ok) throw new Error(data.error || '生成失败');
+    lastSubId = data.id;
+    const url = location.origin + '/sub/' + data.id;
+    document.getElementById('subBox').innerHTML =
+      `🔗 订阅链接：<code>${url}</code><br><br>` +
+      `<button onclick="copySub('${url}')">复制链接</button> ` +
+      `<button class="danger" onclick="deleteSub()">删除订阅</button>` +
+      `<p style="font-size:12px;color:#888">把此链接添加到 OpenClash / Clash 的订阅管理中即可</p>`;
+    document.getElementById('subBox').style.display = 'block';
+  } catch (e) { alert('生成失败：' + e.message); }
+  btn.disabled = false; btn.textContent = '生成订阅链接';
+}
+
+function copySub(url) {
+  navigator.clipboard.writeText(url).then(() => alert('已复制'));
+}
+
+async function deleteSub() {
+  if (!lastSubId || !confirm('确定删除服务器上的这个订阅吗？')) return;
+  const resp = await fetch('/sub/' + lastSubId, { method: 'DELETE' });
+  if (resp.ok) {
+    alert('已删除');
+    document.getElementById('subBox').style.display = 'none';
+    lastSubId = '';
+  } else { alert('删除失败'); }
+}
+</script>
+</body>
+</html>
